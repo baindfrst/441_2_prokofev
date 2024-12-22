@@ -1,0 +1,385 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Genetic Algorithm Optimization</title>
+    <style>
+        .container {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .form-container {
+            width: 45%;
+        }
+
+        .graph-container {
+            width: 45%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }
+
+        .graph {
+            width: 100%;
+            height: 300px;
+            border: 1px solid black;
+            position: relative;
+        }
+
+        .small-graph {
+            width: 100%;
+            height: 150px;
+            border: 1px solid black;
+            margin-top: 20px;
+            position: relative;
+        }
+
+        .result-field {
+            font-size: 1.5em;
+            margin-bottom: 10px;
+        }
+
+        .accordion {
+            background-color: #eee;
+            color: #444;
+            cursor: pointer;
+            padding: 18px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            transition: 0.4s;
+        }
+
+            .active, .accordion:hover {
+                background-color: #ccc;
+            }
+
+        .panel {
+            padding: 0 18px;
+            display: none;
+            background-color: white;
+            overflow: hidden;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        table, th, td {
+            border: 1px solid black;
+        }
+
+        th, td {
+            padding: 8px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>Genetic Algorithm Optimization</h1>
+    <div class="container">
+        <div class="form-container">
+            <form id="experimentForm">
+                <label for="countPopulation">Count Population:</label>
+                <input type="number" id="countPopulation" name="countPopulation" required><br><br>
+                <label for="countCity">Count City:</label>
+                <input type="number" id="countCity" name="countCity" required><br><br>
+                <label for="lr">Lr:</label>
+                <input type="number" id="lr" name="lr" required><br><br>
+                <label for="countThreads">Count Threads:</label>
+                <input type="number" id="countThreads" name="countThreads" required><br><br>
+                <button type="button" onclick="createExperiment()">Create Experiment</button>
+            </form>
+            <div class="result-field" id="experimentIdField"></div>
+            <div class="result-field" id="bestScoreField"></div>
+            <div class="result-field" id="epochsField"></div>
+            <div class="result-field" id="bestPathField"></div>
+        </div>
+        <div class="graph-container">
+            <svg class="graph" id="graph"></svg>
+            <svg class="small-graph" id="smallGraph"></svg>
+        </div>
+    </div>
+    <button id="startButton" onclick="startExperiment()" disabled>Start Experiment</button>
+    <button id="stopButton" onclick="stopExperiment()" disabled>Stop Experiment</button>
+    <button id="deleteButton" onclick="deleteExperiment()" disabled>Delete Experiment</button>
+
+    <button class="accordion">City Map</button>
+    <div class="panel">
+        <table id="cityMapTable"></table>
+    </div>
+
+    <script>
+        let experimentId = null;
+        let intervalId = null;
+        let points = [];
+        let bestScores = [];
+
+        const acc = document.querySelectorAll(".accordion");
+        for (let i = 0; i < acc.length; i++) {
+            acc[i].addEventListener("click", function () {
+                this.classList.toggle("active");
+                const panel = this.nextElementSibling;
+                if (panel.style.display === "block") {
+                    panel.style.display = "none";
+                } else {
+                    panel.style.display = "block";
+                }
+            });
+        }
+
+        async function createExperiment() {
+            const countPopulation = document.getElementById('countPopulation').value;
+            const countCity = document.getElementById('countCity').value;
+            const lr = document.getElementById('lr').value;
+            const countThreads = document.getElementById('countThreads').value;
+
+            const response = await fetch('/api/experiments', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    countPopulation,
+                    countCity,
+                    lr,
+                    countThreads
+                })
+            });
+
+            if (!response.ok) {
+                console.error('Failed to create experiment:', response.statusText);
+                return;
+            }
+
+            try {
+                const data = await response.json();
+                console.log('Response data:', data);
+                experimentId = data.experimentId;
+                document.getElementById('startButton').disabled = false;
+                document.getElementById('stopButton').disabled = true;
+                document.getElementById('deleteButton').disabled = false;
+                document.getElementById('experimentIdField').innerText = `Experiment ID: ${experimentId}`;
+                displayCityMap(JSON.parse(data.matrix));
+                initializeGraph(countCity);
+                initializeSmallGraph();
+            } catch (e) {
+                console.error('Failed to parse response data:', e);
+                alert('Failed to parse response data. Please check the server response.');
+            }
+        }
+
+        async function startExperiment() {
+            if (experimentId === null) {
+                alert('Please create an experiment first.');
+                return;
+            }
+
+            document.getElementById('startButton').disabled = true;
+            document.getElementById('stopButton').disabled = false;
+            document.getElementById('deleteButton').disabled = true;
+
+            intervalId = setInterval(async () => {
+                const countPopulation = document.getElementById('countPopulation').value;
+                const countCity = document.getElementById('countCity').value;
+                const lr = document.getElementById('lr').value;
+                const countThreads = document.getElementById('countThreads').value;
+
+                const response = await fetch(`/api/experiments/${experimentId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        countPopulation,
+                        countCity,
+                        lr,
+                        countThreads
+                    })
+                });
+
+                if (!response.ok) {
+                    console.error('Failed to run step:', response.statusText);
+                    alert('Failed to run step.');
+                    clearInterval(intervalId);
+                    return;
+                }
+
+                try {
+                    const data = await response.json();
+                    console.log('Step result:', data);
+                    document.getElementById('bestScoreField').innerText = `Best Score: ${data.bestScore}`;
+                    document.getElementById('epochsField').innerText = `Epochs: ${data.epochs}`;
+                    document.getElementById('bestPathField').innerText = `Best Path: ${data.best}`;
+                    if (data.new_best) {
+                        drawGraph(data.best);
+                    }
+                    updateSmallGraph(data.bestScore, data.epochs);
+                } catch (e) {
+                    console.error('Failed to parse response data:', e);
+                    alert('Failed to parse response data. Please check the server response.');
+                    clearInterval(intervalId);
+                }
+            }, 50);
+        }
+
+        function stopExperiment() {
+            if (intervalId !== null) {
+                clearInterval(intervalId);
+                intervalId = null;
+                document.getElementById('startButton').disabled = false;
+                document.getElementById('stopButton').disabled = true;
+                document.getElementById('deleteButton').disabled = false;
+            }
+        }
+
+        async function deleteExperiment() {
+            if (experimentId === null) {
+                alert('Please create an experiment first.');
+                return;
+            }
+
+            stopExperiment();
+
+            const response = await fetch(`/api/experiments/${experimentId}`, {
+                method: 'DELETE'
+            });
+
+            if (response.ok) {
+                experimentId = null;
+                document.getElementById('startButton').disabled = true;
+                document.getElementById('stopButton').disabled = true;
+                document.getElementById('deleteButton').disabled = true;
+                document.getElementById('experimentIdField').innerText = `Experiment ID ${experimentId} deleted.`;
+                document.getElementById('bestScoreField').innerText = '';
+                document.getElementById('epochsField').innerText = '';
+                document.getElementById('bestPathField').innerText = '';
+                clearGraph();
+                clearSmallGraph();
+            } else {
+                alert('Failed to delete experiment.');
+            }
+        }
+
+        function displayCityMap(connections) {
+            const table = document.getElementById('cityMapTable');
+            table.innerHTML = '';
+            for (let i = 0; i < connections.length; i++) {
+                const row = document.createElement('tr');
+                for (let j = 0; j < connections.length; j++) {
+                    const cell = document.createElement('td');
+                    cell.innerText = connections[i][j];
+                    row.appendChild(cell);
+                }
+                table.appendChild(row);
+            }
+        }
+
+        function initializeGraph(countCity) {
+            const graph = document.getElementById('graph');
+            graph.innerHTML = '';
+            points = [];
+
+            for (let i = 0; i < countCity; i++) {
+                const x = Math.random() * 400;
+                const y = Math.random() * 400;
+                points.push({ x, y });
+
+                const point = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                point.setAttribute('cx', x);
+                point.setAttribute('cy', y);
+                point.setAttribute('r', 5);
+                point.setAttribute('fill', 'red');
+                graph.appendChild(point);
+            }
+        }
+
+        function drawGraph(path) {
+            const graph = document.getElementById('graph');
+            graph.innerHTML = '';
+
+            const pathIndices = path.split('->').map(Number);
+
+            pathIndices.forEach((index, i) => {
+                const point = points[index];
+                const pointElement = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                pointElement.setAttribute('cx', point.x);
+                pointElement.setAttribute('cy', point.y);
+                pointElement.setAttribute('r', 5);
+                pointElement.setAttribute('fill', 'red');
+                graph.appendChild(pointElement);
+
+                if (i < pathIndices.length - 1) {
+                    const nextIndex = pathIndices[i + 1];
+                    const nextPoint = points[nextIndex];
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', point.x);
+                    line.setAttribute('y1', point.y);
+                    line.setAttribute('x2', nextPoint.x);
+                    line.setAttribute('y2', nextPoint.y);
+                    line.setAttribute('stroke', 'black');
+                    line.setAttribute('stroke-width', 2);
+                    graph.appendChild(line);
+                }
+            });
+        }
+
+        function clearGraph() {
+            const graph = document.getElementById('graph');
+            graph.innerHTML = '';
+        }
+
+        function initializeSmallGraph() {
+            const smallGraph = document.getElementById('smallGraph');
+            smallGraph.innerHTML = '';
+            bestScores = [];
+        }
+
+        function updateSmallGraph(bestScore, epochs) {
+            const smallGraph = document.getElementById('smallGraph');
+            bestScores.push({ epochs, bestScore });
+
+            const maxEpochs = Math.max(...bestScores.map(bs => bs.epochs));
+            const minScore = Math.min(...bestScores.map(bs => bs.bestScore));
+            const maxScore = Math.max(...bestScores.map(bs => bs.bestScore));
+
+            const xScale = 400 / maxEpochs;
+            const yScale = 100 / (maxScore - minScore);
+
+            smallGraph.innerHTML = '';
+
+            bestScores.forEach(bs => {
+                const point = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                point.setAttribute('cx', bs.epochs * xScale);
+                point.setAttribute('cy', (maxScore - bs.bestScore) * yScale);
+                point.setAttribute('r', 2);
+                point.setAttribute('fill', 'blue');
+                smallGraph.appendChild(point);
+
+                if (bestScores.indexOf(bs) > 0) {
+                    const prevBs = bestScores[bestScores.indexOf(bs) - 1];
+                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                    line.setAttribute('x1', prevBs.epochs * xScale);
+                    line.setAttribute('y1', (maxScore - prevBs.bestScore) * yScale);
+                    line.setAttribute('x2', bs.epochs * xScale);
+                    line.setAttribute('y2', (maxScore - bs.bestScore) * yScale);
+                    line.setAttribute('stroke', 'blue');
+                    line.setAttribute('stroke-width', 1);
+                    smallGraph.appendChild(line);
+                }
+            });
+        }
+
+        function clearSmallGraph() {
+            const smallGraph = document.getElementById('smallGraph');
+            smallGraph.innerHTML = '';
+            bestScores = [];
+        }
+    </script>
+</body>
+</html>
